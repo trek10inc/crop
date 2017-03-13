@@ -12,9 +12,8 @@ from .logging import log
 from . import utils
 from . import filters
 
-
 def upload_serverless_artifacts(serverless_dir, asset_bucket,
-        zipfile_s3_prefix, template_s3_prefix, project_version, product_id, autoupdate):
+        zipfile_s3_prefix, template_s3_prefix, project_version, catalog_id, product_id, autoupdate):
     """Upload project zipfiles and template to S3
 
     This function also transforms the Serverless template to remove custom
@@ -36,16 +35,15 @@ def upload_serverless_artifacts(serverless_dir, asset_bucket,
     log.debug('template.rewritten', template=out_template)
 
     if autoupdate:
-        if autoupdate['type'] == 'forced':
-            out_template = filters.inject_autoupdate(out_template, True)
-        elif autoupdate['type'] == 'enabled':
-            out_template = filters.inject_autoupdate(out_template, False)
+        if autoupdate['type'] == 'force':
+            out_template = inject_autoupdate(out_template, catalog_id, product_id, True, autoupdate['interval'])
+        elif autoupdate['type'] == 'enable':
+            out_template = inject_autoupdate(out_template, catalog_id, product_id, False, autoupdate['interval'])
 
         log.debug('template.rewritten', template=out_template)
 
     template_s3_key, version = upload_template(out_template, asset_bucket, template_s3_prefix, project_version)
     return template_s3_key, version
-
 
 def upload_zipfiles(serverless_dir, asset_bucket, asset_key_map):
     """Takes an asset key map and will return a new one with uploaded files. If

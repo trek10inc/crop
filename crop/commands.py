@@ -37,6 +37,7 @@ def update_product(config, arguments):
         asset_bucket=config['bucket'],
         zipfile_s3_prefix="assets/{}/".format(product_id),
         template_s3_prefix="templates/{}/".format(product_id),
+        catalog_id=config['catalog'].get('id'),
         project_version=arguments['--version'],
         product_id=product_id,
         autoupdate=config['autoupdate']
