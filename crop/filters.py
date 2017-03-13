@@ -4,7 +4,7 @@
 
 import os
 import six
-
+from .logging import log
 
 def pop_bucket(template):
     """Remove CFN resources that create the bucket for serverless artifacts"""
@@ -46,7 +46,7 @@ def replace_function_artifacts(template, asset_bucket, asset_key_map):
     return template
 
 
-def inject_autoupdate(template, product_id, force=False):
+def inject_autoupdate(template, catalog_id, product_id, force=False, interval=15):
     """Inject a Lambda Function (and possible CF Param) for auto updating the
     service based on polling. You can either force this update, or allow it to be optional,
     in which case it is set by a CF dropdown parameter when the user starts the stack from
@@ -56,15 +56,19 @@ def inject_autoupdate(template, product_id, force=False):
 
     product_id: str product ID to take updates from. This will be injected into the
                 updater function environment variables.
+
+    force: bool should the template update be forced or optional
+
+    interval: int the number of minutes between autoupdate checks
     """
 
 
     if any((x in template['Resources'] for x in (
-                'CROPAutoUpdaterRole',
-                'CROPAutoUpdaterEvent',
-                'CROPAutoUpdaterEventPermission'
-                'CROPAutoUpdaterFunction'
-            ))):
+            'CROPAutoUpdaterRole',
+            'CROPAutoUpdaterEvent',
+            'CROPAutoUpdaterEventPermission',
+            'CROPAutoUpdaterFunction'
+        ))):
         raise ValueError('Resource logical IDs conflict with keys used by CROP')
 
     if 'AutoUpdates' in template['Params']:
@@ -79,6 +83,7 @@ def inject_autoupdate(template, product_id, force=False):
         'Properties': {
             # Add update policy
             'AssumeRolePolicyDocument': {
+                'Version': '2012-10-17',
                 'Statement': [
                     {
                         'Action': ['sts:AssumeRole'],
@@ -90,7 +95,6 @@ def inject_autoupdate(template, product_id, force=False):
                         }
                     }
                 ],
-                'Version': '2012-10-17'
             },
             'Policies': [{
                 'PolicyName': 'AutoUpdateServiceCatalog',
@@ -100,33 +104,30 @@ def inject_autoupdate(template, product_id, force=False):
                         'Action': ['*'],
                         'Effect': 'Allow',
                         'Resource': ['*']
-                    }]
+                    }],
                 }
             }]
         }
     }
 
-    if autoupdate['interval'] < 1:
+    if interval < 1:
         raise ValueError('Cannot specify an interval less than 1 (minute)')
 
-
-    if autoupdate['interval'] == 1:
-        intervalString = '1 minute'
+    if interval == 1:
+        interval_string = '1 minute'
     else:
-        intervalString = '{} minutes'.format(autoupdate['interval'])
+        interval_string = '{} minutes'.format(interval)
 
     # event
     template['Resources']['CROPAutoUpdaterEvent'] = {
         'Type':'AWS::Events::Rule',
         'Properties': {
-            'ScheduleExpression': 'rate({})'.format(intervalString), # TODO: 15 minutes?
+            'ScheduleExpression': 'rate({})'.format(interval_string),
             'State': 'ENABLED',
             'Targets': [{
-                    'Arn': {
-                        'Fn::GetAtt': ['AutoUpdaterFunction', 'Arn']
-                    },
-                    'Id': 'autoUpdaterSchedule'
-                }]
+                'Arn': {'Fn::GetAtt': ['CROPAutoUpdaterFunction', 'Arn']},
+                'Id': 'autoUpdaterSchedule'
+            }]
         }
     }
 
@@ -135,34 +136,38 @@ def inject_autoupdate(template, product_id, force=False):
         'Type': 'AWS::Lambda::Permission',
         'Properties': {
             'Action': 'lambda:InvokeFunction',
-            'FunctionName': {'Fn::GetAtt': ['AutoUpdaterFunction', 'Arn']},
+            'FunctionName': {'Fn::GetAtt': ['CROPAutoUpdaterFunction', 'Arn']},
             'Principal': 'events.amazonaws.com',
-            'SourceArn': {'Fn::GetAtt': ['AutoUpdaterEvent', 'Arn']}
+            'SourceArn': {'Fn::GetAtt': ['CROPAutoUpdaterEvent', 'Arn']}
         }
     }
+
+    basepath = os.path.dirname(__file__)
+    autoupdater_path = os.path.abspath(os.path.join(basepath, "autoupdater.py"))
+    with open(autoupdater_path) as auto_update_file:
+        compiled_autoupdater = []
+        content = auto_update_file.readlines()
+        for line in content:
+            compiled_autoupdater.append(line.rstrip())
 
     template['Resources']['CROPAutoUpdaterFunction'] = {
         'Type':'AWS::Lambda::Function',
         'Properties': {
             'Code': {
-                # TODO: Abstract this to other file so we still get syntax highlighting
-                # Or allow custom inject to allow custom "reporting" functionality
-                'ZipFile': 'StuffHere', #inline updater function
-
-                # I think I have to paginate all of this to find all currently provisioned products...
-                # http://boto3.readthedocs.io/en/latest/reference/services/servicecatalog.html?highlight=service%20catalog#ServiceCatalog.Client.list_record_history
-
+                'ZipFile': {"Fn::Join" : ["\n", compiled_autoupdater]}
             },
             'Description': 'AutoUpdater for ServiceCatalog Function',
             'Handler': 'index.handler',
             'MemorySize': '256',
             'Environment': {
                 'Variables': {
+                    'PortfolioId': catalog_id,
                     'StackName': {'Ref': 'AWS::StackName'},
+                    'AutoUpdaterRoleARN': {'Fn::GetAtt': ['CROPAutoUpdaterRole', 'Arn']},
                     'ProductId': product_id
                 }
             },
-            'Role': {'Fn::GetAtt': ['AutoUpdaterRole', 'Arn']},
+            'Role': {'Fn::GetAtt': ['CROPAutoUpdaterRole', 'Arn']},
             'Runtime': 'python2.7',
             'Timeout': 30
         }
@@ -172,22 +177,19 @@ def inject_autoupdate(template, product_id, force=False):
         template.setdefault('Parameters', {})
         template['Parameters']['AutoUpdates'] = {
             'Type': 'String',
-            'Description': 'Allow the service to automatically update itself when an update is available, otherwise you must manually approve updates.',
+            'Description': ('Allow the service to automatically update itself when'
+                            'an update is available, otherwise you must manually approve updates.'),
             'AllowedValues': ['Enable', 'Disable'],
             'Default': 'Enable'
         }
 
         # conditionals on roles / event / lambda
         template.setdefault('Conditions', {})
-        template['Conditions']['CROPAutoUpdating'] = {'Fn::Equals' : [{'Ref' : 'AutoUpdates'}, 'Enabled']}
-
-        for r in (
-                'CROPAutoUpdaterFunction',
-                'CROPAutoUpdaterEventPermission',
-                'CROPAutoUpdaterEvent',
-                'CROPAutoUpdaterRole',
-                ):
-            template['Resources'][r]['Condition'] = 'CROPAutoUpdating'
+        template['Conditions']['CROPAutoUpdating'] = {'Fn::Equals' : [{'Ref' : 'AutoUpdates'}, 'Enable']}
+        template['Resources']['CROPAutoUpdaterFunction']['Condition'] = 'CROPAutoUpdating'
+        template['Resources']['CROPAutoUpdaterEventPermission']['Condition'] = 'CROPAutoUpdating'
+        template['Resources']['CROPAutoUpdaterEvent']['Condition'] = 'CROPAutoUpdating'
+        template['Resources']['CROPAutoUpdaterRole']['Condition'] = 'CROPAutoUpdating'
 
 
     log.debug('filters.inject_autoupdate', template=template)
