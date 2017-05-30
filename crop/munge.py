@@ -36,9 +36,9 @@ def upload_serverless_artifacts(serverless_dir, asset_bucket,
 
     if autoupdate:
         if autoupdate['type'] == 'force':
-            out_template = inject_autoupdate(out_template, catalog_id, product_id, True, autoupdate['interval'])
+            out_template = filters.inject_autoupdate(out_template, catalog_id, product_id, True, autoupdate['interval'])
         elif autoupdate['type'] == 'enable':
-            out_template = inject_autoupdate(out_template, catalog_id, product_id, False, autoupdate['interval'])
+            out_template = filters.inject_autoupdate(out_template, catalog_id, product_id, False, autoupdate['interval'])
 
         log.debug('template.rewritten', template=out_template)
 

@@ -71,10 +71,10 @@ def inject_autoupdate(template, catalog_id, product_id, force=False, interval=15
         ))):
         raise ValueError('Resource logical IDs conflict with keys used by CROP')
 
-    if 'AutoUpdates' in template['Params']:
+    if 'AutoUpdates' in template['Parameters']:
         raise ValueError('Param IDs conflict with Param IDs used by CROP')
 
-    if 'CROPAutoUpdating' in template['Conditions']:
+    if ('Conditions' in template.keys()) and ('CROPAutoUpdating' in template['Conditions']):
         raise ValueError('Condition IDs conflict with Conditions IDs used by CROP')
 
     # role
